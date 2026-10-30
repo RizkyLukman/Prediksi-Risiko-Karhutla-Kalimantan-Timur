@@ -1,0 +1,49 @@
+[project]
+name = "karhutla-kaltim"
+version = "0.1.0"
+description = "Weekly wildfire hotspot risk prediction per grid cell for East Kalimantan, Indonesia."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Rizky Lukman" }]
+dependencies = [
+    "pandas>=2.2",
+    "pyarrow>=16",
+    "pyyaml>=6",
+    "pydantic>=2.7",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+# Dependencies are added per phase as the corresponding feature is implemented.
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/karhutla"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["data", "mlruns", "notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W", "N"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["karhutla"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["error::DeprecationWarning:karhutla.*"]
