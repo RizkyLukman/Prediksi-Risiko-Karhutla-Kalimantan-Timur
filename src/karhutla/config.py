@@ -110,8 +110,20 @@ class AdminSourceConfig(_Strict):
     expected_adm2_count: int = Field(ge=1)
 
 
+class FirmsSourceConfig(_Strict):
+    """FIRMS area API settings for the hotspot archive."""
+
+    api_base: str
+    availability_base: str
+    source: str
+    day_range: int = Field(ge=1, le=5)
+    sleep_seconds: float = Field(ge=0)
+    timezone: str
+
+
 class SourcesConfig(_Strict):
     admin: AdminSourceConfig
+    firms: FirmsSourceConfig
 
 
 class Config(_Strict):

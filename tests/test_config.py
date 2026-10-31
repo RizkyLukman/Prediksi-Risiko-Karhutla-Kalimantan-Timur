@@ -99,3 +99,12 @@ def test_missing_admin_source_field_gives_clear_error(tmp_path: Path) -> None:
     path = _write(tmp_path, data)
     with pytest.raises(ConfigError, match="sources.admin.layer"):
         load_config(path)
+
+
+def test_firms_source_section_is_validated() -> None:
+    cfg = load_config()
+    firms = cfg.sources.firms
+    assert firms.source == "VIIRS_SNPP_SP"
+    assert 1 <= firms.day_range <= 5
+    assert firms.api_base.startswith("https://")
+    assert firms.timezone == "Asia/Makassar"

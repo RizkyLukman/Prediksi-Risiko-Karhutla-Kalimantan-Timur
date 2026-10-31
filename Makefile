@@ -5,7 +5,11 @@
 CONFIG ?= configs/config.yaml
 RUN := uv run
 
-.PHONY: help setup lint test admin grid data labels features train evaluate score serve monitor all
+# Kredensial lokal (tidak ikut repo). Variabel di .env diekspor ke proses anak.
+-include .env
+export FIRMS_MAP_KEY
+
+.PHONY: help setup lint test admin grid firms data labels features train evaluate score serve monitor all
 
 help:
 	@echo Available targets:
@@ -15,6 +19,7 @@ help:
 	@echo   test      Run pytest
 	@echo   admin     Download and standardize admin boundaries          [Phase 1]
 	@echo   grid      Build the 0.05 degree grid clipped to the province   [Phase 1]
+	@echo   firms     Download and clean the FIRMS VIIRS S-NPP archive   [Phase 2]
 	@echo   data      Download raw data: admin, FIRMS, ERA5, Hansen, peat  [Phase 2]
 	@echo   labels    Clean static heat sources and build the label panel  [Phase 3-4]
 	@echo   features  Build weather, history, and static features          [Phase 4]
@@ -42,7 +47,10 @@ admin:
 grid: admin
 	$(RUN) python -m karhutla.grid --config $(CONFIG)
 
-data: admin grid
+firms: admin
+	$(RUN) python -m karhutla.ingest.firms --config $(CONFIG)
+
+data: admin grid firms
 	@echo "[placeholder] data: implemented in Phase 2 (F-2.1 to F-2.5)"
 
 labels: data

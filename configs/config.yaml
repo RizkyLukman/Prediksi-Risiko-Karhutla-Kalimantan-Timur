@@ -19,7 +19,7 @@ grid:
   min_area_fraction: 0.0         # buang sel jika fraksi luas di dalam provinsi <= nilai ini
 
 time:
-  start_date: "2012-01-23"      # TODO(verify): tanggal awal data VIIRS S-NPP
+  start_date: "2012-01-23"      # Senin pertama setelah awal arsip VIIRS S-NPP (20 Jan 2012, diverifikasi 2026-11-01)
   week_convention: "iso"
   horizon_weeks: 1
 
@@ -31,7 +31,7 @@ split:
 
 labels:
   sensor: "VIIRS_SNPP"
-  confidence_keep: ["n", "h"]   # TODO(verify): kode confidence di data arsip (OQ-1)
+  confidence_keep: ["n", "h"]   # kode l/n/h dikonfirmasi dari respons API VIIRS_SNPP_SP (OQ-1, 2026-11-01)
   static_source:
     cluster_eps_m: 500
     min_active_months: 12       # placeholder, tentukan dari analisis F-3.1
@@ -59,3 +59,17 @@ sources:
     name_col: "adm2_name"
     pcode_col: "adm2_pcode"
     expected_adm2_count: 10
+  firms:
+    # OQ-1 (diverifikasi 2026-11-01 dari firms.modaps.eosdis.nasa.gov/api/area dan
+    # modaps.modaps.eosdis.nasa.gov VNP14IMGTDL_NRT): area API maks 5 hari per permintaan,
+    # kuota 5000 transaksi / 10 menit per MAP_KEY. VIIRS_SNPP_SP = standard processing
+    # (science quality), satu-satunya yang punya kolom `type` (0 presumed vegetation fire,
+    # 1 active volcano, 2 other static land source, 3 offshore).
+    # MAP_KEY dibaca dari variabel lingkungan FIRMS_MAP_KEY (lihat .env.example).
+    api_base: "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
+    # CSV kolom data_id,min_date,max_date; dipakai agar potongan yang datanya belum rilis tidak di-cache kosong
+    availability_base: "https://firms.modaps.eosdis.nasa.gov/api/data_availability/csv"
+    source: "VIIRS_SNPP_SP"
+    day_range: 5
+    sleep_seconds: 0.2
+    timezone: "Asia/Makassar"     # WITA (UTC+8) untuk tanggal lokal dan minggu ISO
