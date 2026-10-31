@@ -1,0 +1,45 @@
+# Konfigurasi utama proyek. Semua path, tahun, dan parameter ada di sini.
+# Loader: src/karhutla/config.py (validasi pydantic, field tak dikenal ditolak).
+
+project: karhutla-kaltim
+seed: 42
+
+paths:
+  data_raw: data/raw
+  data_interim: data/interim
+  data_processed: data/processed
+  reports: reports
+
+region:
+  province: "Kalimantan Timur"
+  bbox_buffer_deg: 0.1
+
+grid:
+  resolution_deg: 0.05
+
+time:
+  start_date: "2012-01-23"      # TODO(verify): tanggal awal data VIIRS S-NPP
+  week_convention: "iso"
+  horizon_weeks: 1
+
+split:
+  train: [2012, 2021]
+  val: [2022, 2022]
+  test: [2023, 2025]
+  production_sim: [2026, 2026]
+
+labels:
+  sensor: "VIIRS_SNPP"
+  confidence_keep: ["n", "h"]   # TODO(verify): kode confidence di data arsip (OQ-1)
+  static_source:
+    cluster_eps_m: 500
+    min_active_months: 12       # placeholder, tentukan dari analisis F-3.1
+    min_active_years: 3         # placeholder
+
+features:
+  era5_latency_days: 6          # TODO(verify): OQ-2
+  rain_windows_days: [7, 30, 90]
+  hotspot_lags_weeks: [1, 2, 3, 4]
+
+evaluation:
+  top_k_percent: [5, 10]
