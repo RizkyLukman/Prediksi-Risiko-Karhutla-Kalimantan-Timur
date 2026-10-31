@@ -116,8 +116,10 @@ class FirmsSourceConfig(_Strict):
     api_base: str
     availability_base: str
     source: str
+    nrt_source: str
     day_range: int = Field(ge=1, le=5)
     sleep_seconds: float = Field(ge=0)
+    nrt_refetch_days: int = Field(ge=0)
     timezone: str
 
 

@@ -9,7 +9,7 @@ RUN := uv run
 -include .env
 export FIRMS_MAP_KEY
 
-.PHONY: help setup lint test admin grid firms data labels features train evaluate score serve monitor all
+.PHONY: help setup lint test admin grid firms firms-update data labels features train evaluate score serve monitor all
 
 help:
 	@echo Available targets:
@@ -20,6 +20,7 @@ help:
 	@echo   admin     Download and standardize admin boundaries          [Phase 1]
 	@echo   grid      Build the 0.05 degree grid clipped to the province   [Phase 1]
 	@echo   firms     Download and clean the FIRMS VIIRS S-NPP archive   [Phase 2]
+	@echo   firms-update  Refresh SP + NRT hotspots and write the merged table [Phase 2]
 	@echo   data      Download raw data: admin, FIRMS, ERA5, Hansen, peat  [Phase 2]
 	@echo   labels    Clean static heat sources and build the label panel  [Phase 3-4]
 	@echo   features  Build weather, history, and static features          [Phase 4]
@@ -48,7 +49,10 @@ grid: admin
 	$(RUN) python -m karhutla.grid --config $(CONFIG)
 
 firms: admin
-	$(RUN) python -m karhutla.ingest.firms --config $(CONFIG)
+	$(RUN) python -m karhutla.ingest.firms --config $(CONFIG) archive
+
+firms-update: admin
+	$(RUN) python -m karhutla.ingest.firms --config $(CONFIG) update
 
 data: admin grid firms
 	@echo "[placeholder] data: implemented in Phase 2 (F-2.1 to F-2.5)"

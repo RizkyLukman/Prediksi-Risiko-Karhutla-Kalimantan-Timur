@@ -165,8 +165,19 @@ def parse_csv(text: str) -> pd.DataFrame:
 # --- download ----------------------------------------------------------------
 
 
-def _chunk_path(out_dir: Path, source: str, start: date, n_days: int) -> Path:
-    return out_dir / f"{start:%Y}" / f"{source}_{start:%Y-%m-%d}_{n_days}d.csv"
+def _chunk_path(out_dir: Path, source: str, start: date, n_days: int, *, partial: bool) -> Path:
+    suffix = "_partial" if partial else ""
+    return out_dir / f"{start:%Y}" / f"{source}_{start:%Y-%m-%d}_{n_days}d{suffix}.csv"
+
+
+def _parse_chunk_name(path: Path) -> tuple[date, int, bool]:
+    """Inverse of _chunk_path: (chunk_start, n_days, partial)."""
+    stem = path.stem
+    partial = stem.endswith("_partial")
+    if partial:
+        stem = stem[: -len("_partial")]
+    _, start_s, days_s = stem.rsplit("_", 2)
+    return date.fromisoformat(start_s), int(days_s.rstrip("d")), partial
 
 
 def download_archive(
@@ -181,35 +192,59 @@ def download_archive(
     api_base: str = "https://firms.modaps.eosdis.nasa.gov/api/area/csv",
     fetch: Fetcher | None = None,
     sleep_seconds: float = 0.2,
+    available_from: date | None = None,
     available_until: date | None = None,
+    volatile_from: date | None = None,
+    prune_before_from: bool = False,
 ) -> int:
     """Fetch every missing chunk in [start, end]. Returns the number written.
 
     Chunks are always aligned to ``start`` in ``max_days`` steps, so the same
-    dates map to the same file names on every run. A chunk whose last day is
-    after ``available_until`` is skipped (not cached) so it is fetched once the
-    API actually serves those dates.
+    dates map to the same file names on every run. Each chunk is requested only
+    for the part inside [available_from, available_until]. A chunk that is
+    clipped, or that ends on/after ``volatile_from`` (data may still be
+    incomplete), is stored as ``*_partial.csv``; partial files are deleted and
+    refetched on every run, and become ordinary cached files once the API
+    serves them in full. With ``prune_before_from`` cached chunks that end
+    before ``available_from`` are deleted (used for NRT once SP covers them).
     """
     fetcher = fetch or _http_fetch
     manifest = out_dir / "manifest.jsonl"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for stale in out_dir.rglob("*_partial.csv"):
+        stale.unlink()
+    if prune_before_from and available_from is not None:
+        for cached in out_dir.rglob("*.csv"):
+            c_start, c_days, _ = _parse_chunk_name(cached)
+            if c_start + timedelta(days=c_days - 1) < available_from:
+                cached.unlink()
+                log.info("pruned %s (before %s)", cached.name, available_from)
+
     written = 0
     skipped_unavailable = 0
     chunks = iter_chunks(start, end, max_days=max_days)
     for i, (chunk_start, n_days) in enumerate(chunks, 1):
         chunk_end = chunk_start + timedelta(days=n_days - 1)
-        if available_until is not None and chunk_end > available_until:
+        eff_start = max(chunk_start, available_from) if available_from else chunk_start
+        eff_end = min(chunk_end, available_until) if available_until else chunk_end
+        if eff_start > eff_end:
             skipped_unavailable += 1
             continue
-        path = _chunk_path(out_dir, source, chunk_start, n_days)
+        clipped = (eff_start, eff_end) != (chunk_start, chunk_end)
+        volatile = volatile_from is not None and chunk_end >= volatile_from
+        partial = clipped or volatile
+        path = _chunk_path(out_dir, source, chunk_start, n_days, partial=partial)
         if path.exists():
             continue
+        req_days = (eff_end - eff_start).days + 1
         url = build_area_url(
             api_base,
             map_key=map_key,
             source=source,
             bbox=bbox,
-            day_range=n_days,
-            start=chunk_start,
+            day_range=req_days,
+            start=eff_start,
         )
         try:
             text = fetcher(url)
@@ -224,6 +259,9 @@ def download_archive(
             "source": source,
             "start": chunk_start.isoformat(),
             "days": n_days,
+            "requested_start": eff_start.isoformat(),
+            "requested_days": req_days,
+            "partial": partial,
             "bbox": list(bbox),
             "file": path.relative_to(out_dir).as_posix(),
             "rows": int(len(df)),
@@ -238,7 +276,8 @@ def download_archive(
         if sleep_seconds:
             time.sleep(sleep_seconds)
     log.info(
-        "%d new chunks written to %s (%d total, %d not yet available)",
+        "%s: %d new chunks written to %s (%d total, %d not available)",
+        source,
         written,
         out_dir,
         len(chunks),
@@ -247,9 +286,11 @@ def download_archive(
     return written
 
 
-def load_raw(out_dir: Path) -> pd.DataFrame:
-    files = sorted(out_dir.rglob("*.csv"))
+def load_raw(out_dir: Path, *, allow_empty: bool = False) -> pd.DataFrame:
+    files = sorted(out_dir.rglob("*.csv")) if out_dir.exists() else []
     if not files:
+        if allow_empty:
+            return pd.DataFrame(columns=REQUIRED_COLUMNS)
         raise FileNotFoundError(f"no chunk CSVs under {out_dir}")
     frames = [parse_csv(p.read_text(encoding="utf-8")) for p in files]
     return pd.concat(frames, ignore_index=True)
@@ -279,6 +320,103 @@ def clean_hotspots(df: pd.DataFrame, *, bbox: BBox, tz: str) -> pd.DataFrame:
     out["year"] = local.dt.year.astype("int16")
     out["month"] = local.dt.month.astype("int8")
     return out.sort_values(["acq_datetime_utc", "latitude", "longitude"], ignore_index=True)
+
+
+# --- merge SP + NRT ----------------------------------------------------------
+
+
+def merge_sources(sp: pd.DataFrame, nrt: pd.DataFrame, *, sp_max: date) -> pd.DataFrame:
+    """Combine cleaned SP and NRT rows: SP wins, NRT only after ``sp_max``."""
+    sp = sp.assign(source="SP")
+    nrt = nrt.assign(source="NRT")
+    if not nrt.empty:
+        nrt = nrt[pd.to_datetime(nrt["acq_date"]).dt.date > sp_max]
+    if "type" not in nrt.columns:
+        nrt = nrt.assign(type=pd.array([pd.NA] * len(nrt), dtype="Int64"))
+    nrt = nrt[sp.columns]
+    out = pd.concat([sp, nrt], ignore_index=True).drop_duplicates(DEDUP_COLUMNS, keep="first")
+    return out.sort_values(["acq_datetime_utc", "latitude", "longitude"], ignore_index=True)
+
+
+def run_update(
+    *,
+    map_key: str,
+    sp_source: str,
+    nrt_source: str,
+    bbox: BBox,
+    start: date,
+    today: date,
+    raw_root: Path,
+    out_path: Path,
+    max_days: int,
+    nrt_refetch_days: int,
+    tz: str,
+    api_base: str,
+    availability_base: str,
+    fetch: Fetcher | None = None,
+    sleep_seconds: float = 0.2,
+) -> pd.DataFrame:
+    """Refresh SP + NRT caches and write the merged, cleaned hotspot table."""
+    _, sp_max = fetch_availability(
+        availability_base, map_key=map_key, source=sp_source, fetch=fetch
+    )
+    nrt_min, nrt_max = fetch_availability(
+        availability_base, map_key=map_key, source=nrt_source, fetch=fetch
+    )
+    log.info("%s until %s; %s %s .. %s", sp_source, sp_max, nrt_source, nrt_min, nrt_max)
+
+    common = dict(
+        map_key=map_key,
+        bbox=bbox,
+        start=start,
+        end=today,
+        max_days=max_days,
+        api_base=api_base,
+        fetch=fetch,
+        sleep_seconds=sleep_seconds,
+    )
+    sp_dir = raw_root / sp_source
+    nrt_dir = raw_root / nrt_source
+    download_archive(source=sp_source, out_dir=sp_dir, available_until=sp_max, **common)
+    download_archive(
+        source=nrt_source,
+        out_dir=nrt_dir,
+        available_from=max(nrt_min, sp_max + timedelta(days=1)),
+        available_until=nrt_max,
+        volatile_from=today - timedelta(days=nrt_refetch_days),
+        prune_before_from=True,
+        **common,
+    )
+
+    sp_df = clean_hotspots(load_raw(sp_dir), bbox=bbox, tz=tz)
+    nrt_raw = load_raw(nrt_dir, allow_empty=True)
+    nrt_df = clean_hotspots(nrt_raw, bbox=bbox, tz=tz) if not nrt_raw.empty else nrt_raw
+    merged = merge_sources(sp_df, nrt_df, sp_max=sp_max)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    merged.to_parquet(out_path, index=False)
+    meta = {
+        "sp_source": sp_source,
+        "nrt_source": nrt_source,
+        "sp_max": sp_max.isoformat(),
+        "nrt_min": nrt_min.isoformat(),
+        "nrt_max": nrt_max.isoformat(),
+        "rows": int(len(merged)),
+        "rows_sp": int((merged["source"] == "SP").sum()),
+        "rows_nrt": int((merged["source"] == "NRT").sum()),
+        "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    out_path.with_name(out_path.stem + ".meta.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8"
+    )
+    log.info(
+        "wrote %d rows (%d SP, %d NRT) to %s",
+        meta["rows"],
+        meta["rows_sp"],
+        meta["rows_nrt"],
+        out_path,
+    )
+    return merged
 
 
 # --- summaries ---------------------------------------------------------------
@@ -321,44 +459,36 @@ def plot_summary(by_year: pd.DataFrame, by_month: pd.DataFrame, out_path: Path) 
 # --- CLI ---------------------------------------------------------------------
 
 
-def main() -> None:
-    import argparse
-    import os
-
+def _bbox_from_config(cfg) -> BBox:
     import geopandas as gpd
 
-    from karhutla.config import REPO_ROOT, load_config
-
-    parser = argparse.ArgumentParser(description="Download and clean the FIRMS archive.")
-    parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument(
-        "--end", type=date.fromisoformat, default=None, help="last date to fetch (default: today)"
-    )
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
-    cfg = load_config(args.config)
-    src = cfg.sources.firms
-    map_key = os.environ.get("FIRMS_MAP_KEY", "").strip()
-    if not map_key:
-        raise SystemExit("FIRMS_MAP_KEY is not set; copy .env.example to .env and fill it in")
+    from karhutla.config import REPO_ROOT
 
     adm1 = gpd.read_parquet(REPO_ROOT / cfg.paths.data_processed / "admin" / "adm1.parquet")
     pad = cfg.region.bbox_buffer_deg
     minx, miny, maxx, maxy = (float(v) for v in adm1.total_bounds)
-    bbox: BBox = (
-        round(minx - pad, 4),
-        round(miny - pad, 4),
-        round(maxx + pad, 4),
-        round(maxy + pad, 4),
-    )
+    return (round(minx - pad, 4), round(miny - pad, 4), round(maxx + pad, 4), round(maxy + pad, 4))
 
+
+def _map_key() -> str:
+    import os
+
+    key = os.environ.get("FIRMS_MAP_KEY", "").strip()
+    if not key:
+        raise SystemExit("FIRMS_MAP_KEY is not set; copy .env.example to .env and fill it in")
+    return key
+
+
+def _cmd_archive(cfg, end: date | None) -> None:
+    from karhutla.config import REPO_ROOT
+
+    src = cfg.sources.firms
+    map_key = _map_key()
+    bbox = _bbox_from_config(cfg)
     raw_dir = REPO_ROOT / cfg.paths.data_raw / "firms" / src.source
-    end = args.end or datetime.now(UTC).date()
-    avail_min, avail_max = fetch_availability(
-        src.availability_base, map_key=map_key, source=src.source
-    )
-    log.info("%s available %s .. %s", src.source, avail_min, avail_max)
+    end = end or datetime.now(UTC).date()
+    _, avail_max = fetch_availability(src.availability_base, map_key=map_key, source=src.source)
+    log.info("%s available until %s", src.source, avail_max)
     download_archive(
         map_key=map_key,
         source=src.source,
@@ -387,6 +517,53 @@ def main() -> None:
     first, last = clean["acq_date_local"].min(), clean["acq_date_local"].max()
     print(f"bbox {bbox}; {len(clean)} hotspots {first} .. {last} -> {out}")
     print(by_year.to_string(index=False))
+
+
+def _cmd_update(cfg, today: date | None) -> None:
+    from karhutla.config import REPO_ROOT
+
+    src = cfg.sources.firms
+    merged = run_update(
+        map_key=_map_key(),
+        sp_source=src.source,
+        nrt_source=src.nrt_source,
+        bbox=_bbox_from_config(cfg),
+        start=cfg.time.start_date,
+        today=today or datetime.now(UTC).date(),
+        raw_root=REPO_ROOT / cfg.paths.data_raw / "firms",
+        out_path=REPO_ROOT / cfg.paths.data_processed / "firms" / "hotspots_viirs_snpp.parquet",
+        max_days=src.day_range,
+        nrt_refetch_days=src.nrt_refetch_days,
+        tz=src.timezone,
+        api_base=src.api_base,
+        availability_base=src.availability_base,
+        sleep_seconds=src.sleep_seconds,
+    )
+    last = merged["acq_date_local"].max()
+    counts = merged["source"].value_counts().to_dict()
+    print(f"{len(merged)} hotspots through {last} ({counts})")
+
+
+def main() -> None:
+    import argparse
+
+    from karhutla.config import load_config
+
+    parser = argparse.ArgumentParser(description="FIRMS VIIRS S-NPP hotspot ingestion.")
+    parser.add_argument("--config", type=Path, default=None)
+    sub = parser.add_subparsers(dest="command")
+    p_archive = sub.add_parser("archive", help="download the standard-processing archive")
+    p_archive.add_argument("--end", type=date.fromisoformat, default=None)
+    p_update = sub.add_parser("update", help="refresh SP + NRT and write the merged table")
+    p_update.add_argument("--today", type=date.fromisoformat, default=None)
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    cfg = load_config(args.config)
+    if args.command == "update":
+        _cmd_update(cfg, args.today)
+    else:
+        _cmd_archive(cfg, getattr(args, "end", None))
 
 
 if __name__ == "__main__":

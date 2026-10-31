@@ -275,21 +275,210 @@ def test_fetch_availability_builds_url_and_redacts_errors() -> None:
     assert "SECRET9" not in str(exc_info.value)
 
 
-def test_download_archive_skips_chunks_beyond_availability(tmp_path: Path) -> None:
+# --- partial / volatile chunks (F-2.2) ---------------------------------------
+
+
+def _calls_to_chunks(calls: list[str]) -> list[tuple[str, str]]:
+    """(start_date, day_range) per request URL."""
+    return [(u.rsplit("/", 1)[-1], u.rsplit("/", 2)[-2]) for u in calls]
+
+
+def test_chunk_straddling_available_from_is_clipped_and_marked_partial(tmp_path: Path) -> None:
     calls: list[str] = []
     fetch = _fake_fetch({}, calls)
-    written = download_archive(
+    # aligned chunks from 07-28: [07-28..08-01], [08-02..08-06]; NRT available from 08-01
+    download_archive(
+        map_key="KEY",
+        source="VIIRS_SNPP_NRT",
+        bbox=BBOX,
+        start=date(2026, 7, 28),
+        end=date(2026, 8, 6),
+        out_dir=tmp_path,
+        max_days=5,
+        fetch=fetch,
+        sleep_seconds=0,
+        available_from=date(2026, 8, 1),
+        available_until=date(2026, 8, 31),
+    )
+    assert _calls_to_chunks(calls) == [("2026-08-01", "1"), ("2026-08-02", "5")]
+    names = sorted(p.name for p in tmp_path.rglob("*.csv"))
+    assert names == [
+        "VIIRS_SNPP_NRT_2026-07-28_5d_partial.csv",
+        "VIIRS_SNPP_NRT_2026-08-02_5d.csv",
+    ]
+
+
+def test_chunk_straddling_available_until_is_clipped_and_marked_partial(tmp_path: Path) -> None:
+    calls: list[str] = []
+    fetch = _fake_fetch({}, calls)
+    download_archive(
         map_key="KEY",
         source="VIIRS_SNPP_SP",
         bbox=BBOX,
         start=date(2026, 7, 23),
-        end=date(2026, 8, 6),  # chunks: 07-23..27, 07-28..08-01, 08-02..06
+        end=date(2026, 8, 6),
         out_dir=tmp_path,
         max_days=5,
         fetch=fetch,
         sleep_seconds=0,
         available_until=date(2026, 7, 31),
     )
-    assert written == 1  # only the chunk that ends on or before 07-31
-    assert [u.rsplit("/", 1)[-1] for u in calls] == ["2026-07-23"]
-    assert sorted(p.name for p in tmp_path.rglob("*.csv")) == ["VIIRS_SNPP_SP_2026-07-23_5d.csv"]
+    assert _calls_to_chunks(calls) == [("2026-07-23", "5"), ("2026-07-28", "4")]
+    names = sorted(p.name for p in tmp_path.rglob("*.csv"))
+    assert names == [
+        "VIIRS_SNPP_SP_2026-07-23_5d.csv",
+        "VIIRS_SNPP_SP_2026-07-28_5d_partial.csv",
+    ]
+
+
+def test_partial_chunks_are_refetched_but_full_chunks_are_not(tmp_path: Path) -> None:
+    calls: list[str] = []
+    fetch = _fake_fetch({}, calls)
+    kwargs = dict(
+        map_key="KEY",
+        source="VIIRS_SNPP_SP",
+        bbox=BBOX,
+        start=date(2026, 7, 23),
+        end=date(2026, 8, 6),
+        out_dir=tmp_path,
+        max_days=5,
+        fetch=fetch,
+        sleep_seconds=0,
+        available_until=date(2026, 7, 31),
+    )
+    download_archive(**kwargs)
+    download_archive(**kwargs)
+    assert _calls_to_chunks(calls) == [
+        ("2026-07-23", "5"),
+        ("2026-07-28", "4"),
+        ("2026-07-28", "4"),
+    ]
+    # once the API serves the full chunk, the partial file is replaced by a full one
+    download_archive(**{**kwargs, "available_until": date(2026, 8, 31)})
+    names = sorted(p.name for p in tmp_path.rglob("*.csv"))
+    assert "VIIRS_SNPP_SP_2026-07-28_5d.csv" in names
+    assert not any(n.endswith("_partial.csv") for n in names if "07-28" in n)
+    manifest = [json.loads(line) for line in (tmp_path / "manifest.jsonl").read_text().splitlines()]
+    assert [m["partial"] for m in manifest] == [False, True, True, False, False]
+
+
+def test_recent_chunks_are_volatile(tmp_path: Path) -> None:
+    calls: list[str] = []
+    fetch = _fake_fetch({}, calls)
+    download_archive(
+        map_key="KEY",
+        source="VIIRS_SNPP_NRT",
+        bbox=BBOX,
+        start=date(2026, 10, 1),
+        end=date(2026, 10, 10),
+        out_dir=tmp_path,
+        max_days=5,
+        fetch=fetch,
+        sleep_seconds=0,
+        available_until=date(2026, 10, 10),
+        volatile_from=date(2026, 10, 8),  # data newer than this may still be incomplete
+    )
+    names = sorted(p.name for p in tmp_path.rglob("*.csv"))
+    assert names == [
+        "VIIRS_SNPP_NRT_2026-10-01_5d.csv",
+        "VIIRS_SNPP_NRT_2026-10-06_5d_partial.csv",
+    ]
+
+
+def test_prune_removes_chunks_before_available_from(tmp_path: Path) -> None:
+    calls: list[str] = []
+    fetch = _fake_fetch({}, calls)
+    base = dict(
+        map_key="KEY",
+        source="VIIRS_SNPP_NRT",
+        bbox=BBOX,
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 10),
+        out_dir=tmp_path,
+        max_days=5,
+        fetch=fetch,
+        sleep_seconds=0,
+        available_until=date(2026, 8, 31),
+    )
+    download_archive(**base, available_from=date(2026, 8, 1))
+    assert len(list(tmp_path.rglob("*.csv"))) == 2
+    # SP caught up through 08-05: NRT now only serves from 08-06
+    download_archive(**base, available_from=date(2026, 8, 6), prune_before_from=True)
+    names = sorted(p.name for p in tmp_path.rglob("*.csv"))
+    assert names == ["VIIRS_SNPP_NRT_2026-08-06_5d.csv"]
+
+
+# --- merge_sources -----------------------------------------------------------
+
+
+def test_merge_sources_prefers_sp_and_drops_nrt_inside_sp_window() -> None:
+    from karhutla.ingest.firms import merge_sources
+
+    sp = clean_hotspots(parse_csv(_csv(ROW_A, ROW_B)), bbox=BBOX, tz="Asia/Makassar")
+    nrt_rows = [
+        ROW_A,  # same hotspot as SP (duplicate)
+        "0.9,116.9,330.0,0.4,0.4,2015-09-20,0530,N,VIIRS,n,2.0NRT,290.0,2.0,D,0",  # after sp_max
+        "0.8,116.8,330.0,0.4,0.4,2015-09-14,0530,N,VIIRS,n,2.0NRT,290.0,2.0,D,0",  # inside window
+    ]
+    nrt = clean_hotspots(parse_csv(_csv(*nrt_rows)), bbox=BBOX, tz="Asia/Makassar")
+    nrt = nrt.drop(columns=["type"])  # NRT has no type column
+
+    merged = merge_sources(sp, nrt, sp_max=date(2015, 9, 15))
+
+    assert len(merged) == 3
+    assert merged["source"].tolist().count("SP") == 2
+    assert merged["source"].tolist().count("NRT") == 1
+    assert merged.loc[merged["source"] == "NRT", "acq_date"].iloc[0] == "2015-09-20"
+    assert merged["type"].isna().sum() == 1  # only the NRT row lacks type
+    assert not merged.duplicated(
+        ["latitude", "longitude", "acq_date", "acq_time", "satellite"]
+    ).any()
+
+
+# --- run_update (end to end with fakes) -------------------------------------
+
+
+def test_run_update_twice_yields_identical_rows_without_duplicates(tmp_path: Path) -> None:
+    from karhutla.ingest.firms import run_update
+
+    sp_csv = _csv(ROW_A, ROW_B)
+    nrt_csv = _csv("0.9,116.9,330.0,0.4,0.4,2015-09-20,0530,N,VIIRS,n,2.0NRT,290.0,2.0,D")
+    avail = (
+        "data_id,min_date,max_date\n"
+        "VIIRS_SNPP_SP,2012-01-20,2015-09-17\n"
+        "VIIRS_SNPP_NRT,2015-09-18,2015-09-22\n"
+    )
+
+    def fetch(url: str) -> str:
+        if "/avail/" in url:
+            return avail
+        return nrt_csv if "NRT" in url else sp_csv
+
+    kwargs = dict(
+        map_key="KEY",
+        sp_source="VIIRS_SNPP_SP",
+        nrt_source="VIIRS_SNPP_NRT",
+        bbox=BBOX,
+        start=date(2015, 9, 13),
+        today=date(2015, 9, 22),
+        raw_root=tmp_path / "raw",
+        out_path=tmp_path / "processed" / "hotspots.parquet",
+        max_days=5,
+        nrt_refetch_days=2,
+        tz="Asia/Makassar",
+        api_base="https://x/area",
+        availability_base="https://x/avail",
+        fetch=fetch,
+        sleep_seconds=0,
+    )
+    first = run_update(**kwargs)
+    second = run_update(**kwargs)
+
+    assert len(first) == len(second) == 3
+    assert first.drop(columns=["source"]).equals(second.drop(columns=["source"]))
+    keys = ["latitude", "longitude", "acq_date", "acq_time", "satellite"]
+    assert not second.duplicated(keys).any()
+    assert sorted(second["source"].unique()) == ["NRT", "SP"]
+    meta = json.loads((tmp_path / "processed" / "hotspots.meta.json").read_text())
+    assert meta["sp_max"] == "2015-09-17"
+    assert meta["nrt_max"] == "2015-09-22"

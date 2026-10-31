@@ -70,6 +70,8 @@ sources:
     # CSV kolom data_id,min_date,max_date; dipakai agar potongan yang datanya belum rilis tidak di-cache kosong
     availability_base: "https://firms.modaps.eosdis.nasa.gov/api/data_availability/csv"
     source: "VIIRS_SNPP_SP"
+    nrt_source: "VIIRS_SNPP_NRT"  # 14 kolom, tanpa `type`, version 2.0NRT; jendela mulai sehari setelah max_date SP
     day_range: 5
     sleep_seconds: 0.2
+    nrt_refetch_days: 3           # potongan NRT yang berakhir <= today - 3 hari dianggap final; sisanya diambil ulang tiap run
     timezone: "Asia/Makassar"     # WITA (UTC+8) untuk tanggal lokal dan minggu ISO

@@ -21,7 +21,7 @@ Keterbatasan: sumber mengeja Mahakam Ulu sebagai "Mahakam Hulu" (pcode `ID6411`)
 
 ## 2. Hotspot — NASA FIRMS VIIRS S-NPP 375 m (standard processing)
 
-Ringkasan hasil unduhan (bbox 113,7359–119,0891 BT, −2,5052–2,7263 LS/LU): **366.015 hotspot** semua tingkat confidence, 2012-01-24 s.d. 2026-07-27 (tanggal lokal). Tahun puncak 2015 (118.033) dan 2019 (53.302); terendah 2022 (3.867). Rincian per tahun dan bulan di `reports/firms/`.
+Ringkasan hasil unduhan (bbox 113,7359–119,0891 BT, −2,5052–2,7263 LS/LU): **366.342 hotspot** semua tingkat confidence, 2012-01-24 s.d. 2026-08-01 (tanggal lokal; 4 hari terakhir berasal dari potongan parsial 28–31 Juli yang diambil ulang tiap run). Tahun puncak 2015 (118.033) dan 2019 (53.302); terendah 2022 (3.867). Rincian per tahun dan bulan di `reports/firms/`.
 
 | Item | Nilai |
 |---|---|
@@ -31,7 +31,7 @@ Ringkasan hasil unduhan (bbox 113,7359–119,0891 BT, −2,5052–2,7263 LS/LU):
 | Cakupan spasial | bbox Kaltim + buffer `region.bbox_buffer_deg` (0,1°) |
 | Lisensi | Data NASA, domain publik; FIRMS meminta sitasi "NASA FIRMS" |
 | Format mentah | CSV per potongan ≤5 hari di `data/raw/firms/VIIRS_SNPP_SP/<tahun>/`, manifest `manifest.jsonl` (tanpa MAP_KEY) |
-| Tanggal unduh | 2026-11-01 (1.060 potongan 5 hari, 2012-01-23 s.d. 2026-07-27; endpoint `data_availability` melaporkan data standar tersedia sampai 2026-07-31, potongan yang belum tersedia penuh tidak di-cache). Manifest: `data/raw/firms/VIIRS_SNPP_SP/manifest.jsonl` |
+| Tanggal unduh | 2026-11-01 (1.060 potongan penuh + 1 parsial, 2012-01-23 s.d. 2026-07-31; endpoint `data_availability` melaporkan data standar tersedia sampai 2026-07-31; potongan yang terpotong jendela ketersediaan disimpan sebagai `*_partial.csv` dan diambil ulang tiap run). Manifest: `data/raw/firms/VIIRS_SNPP_SP/manifest.jsonl` |
 | Output | `data/processed/firms/hotspots_viirs_snpp_sp.parquet`; ringkasan `reports/firms/hotspots_per_year.csv`, `hotspots_per_month.csv`; gambar `reports/figures/firms_summary.png` |
 
 ### Kolom mentah (dari dokumentasi resmi FIRMS/MODAPS)
@@ -63,3 +63,17 @@ Ringkasan hasil unduhan (bbox 113,7359–119,0891 BT, −2,5052–2,7263 LS/LU):
 Pembersihan: baris di luar bbox dibuang, duplikat pada (`latitude`, `longitude`, `acq_date`, `acq_time`, `satellite`) dibuang. **Semua tingkat `confidence` dipertahankan** di Parquet; penyaringan ke `n` + `h` dilakukan saat membangun label (Fase 4) sesuai `labels.confidence_keep`.
 
 Keterbatasan: hotspot adalah anomali termal, bukan kebakaran terkonfirmasi. Deteksi bergantung pada tutupan awan dan sudut pandang. Data NRT tidak dipakai untuk arsip agar atribut `type` dan geolokasi berkualitas standar; untuk minggu terbaru (F-2.2) sumber NRT dipakai dan tidak memiliki `type`. Sensor tunggal S-NPP dipertahankan agar laju deteksi konsisten antar-tahun; S-NPP dijadwalkan berhenti dikirim 2 November 2026 (catatan NASA), sehingga simulasi 2026 memakai data yang tersedia sampai saat itu.
+
+### 2b. Pembaruan near-real-time (NRT) dan tabel gabungan
+
+| Item | Nilai |
+|---|---|
+| Sumber NRT | `VIIRS_SNPP_NRT` lewat area API yang sama; 14 kolom, **tanpa `type`**, `version` = `2.0NRT`, `confidence` = `l/n/h` (diverifikasi dari respons nyata 2026-11-01) |
+| Jendela NRT | Dimulai tepat sehari setelah `max_date` SP (contoh 2026-11-01: SP s.d. 2026-07-31, NRT 2026-08-01 s.d. 2026-10-31) |
+| Cache | `data/raw/firms/VIIRS_SNPP_NRT/<tahun>/`; potongan yang terpotong jendela ketersediaan atau berakhir dalam `nrt_refetch_days` (3) hari terakhir disimpan sebagai `*_partial.csv` dan **selalu diambil ulang**; potongan NRT yang sudah dicakup SP dihapus (prune) |
+| Output | `data/processed/firms/hotspots_viirs_snpp.parquet` + `hotspots_viirs_snpp.meta.json` (sp_max, nrt_min, nrt_max, jumlah baris per sumber) |
+| Perintah | `make firms-update` (idempoten: dijalankan dua kali tidak menambah baris duplikat, ada tesnya) |
+
+Aturan gabungan (`merge_sources`): semua baris SP dipakai; baris NRT hanya untuk `acq_date` setelah `max_date` SP; duplikat pada (`latitude`, `longitude`, `acq_date`, `acq_time`, `satellite`) mengutamakan SP; kolom `source` bernilai `SP` atau `NRT`; `type` kosong untuk baris NRT.
+
+Keterbatasan: baris NRT memiliki geolokasi dan kualitas lebih rendah daripada SP dan tidak punya `type`, sehingga mask sumber statis (Fase 3) untuk minggu-minggu NRT hanya bisa mengandalkan klaster spasial, bukan atribut `type`. Tabel gabungan dipakai untuk serving dan simulasi 2026; pelatihan memakai arsip SP.

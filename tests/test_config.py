@@ -108,3 +108,5 @@ def test_firms_source_section_is_validated() -> None:
     assert 1 <= firms.day_range <= 5
     assert firms.api_base.startswith("https://")
     assert firms.timezone == "Asia/Makassar"
+    assert firms.nrt_source == "VIIRS_SNPP_NRT"
+    assert firms.nrt_refetch_days >= 0
