@@ -5,7 +5,7 @@
 CONFIG ?= configs/config.yaml
 RUN := uv run
 
-.PHONY: help setup lint test admin data labels features train evaluate score serve monitor all
+.PHONY: help setup lint test admin grid data labels features train evaluate score serve monitor all
 
 help:
 	@echo Available targets:
@@ -14,6 +14,7 @@ help:
 	@echo   lint      Run ruff check and ruff format --check
 	@echo   test      Run pytest
 	@echo   admin     Download and standardize admin boundaries          [Phase 1]
+	@echo   grid      Build the 0.05 degree grid clipped to the province   [Phase 1]
 	@echo   data      Download raw data: admin, FIRMS, ERA5, Hansen, peat  [Phase 2]
 	@echo   labels    Clean static heat sources and build the label panel  [Phase 3-4]
 	@echo   features  Build weather, history, and static features          [Phase 4]
@@ -38,7 +39,10 @@ test:
 admin:
 	$(RUN) python -m karhutla.ingest.admin --config $(CONFIG)
 
-data: admin
+grid: admin
+	$(RUN) python -m karhutla.grid --config $(CONFIG)
+
+data: admin grid
 	@echo "[placeholder] data: implemented in Phase 2 (F-2.1 to F-2.5)"
 
 labels: data

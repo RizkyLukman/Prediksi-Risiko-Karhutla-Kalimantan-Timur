@@ -25,6 +25,7 @@ def test_default_config_loads_locked_decisions() -> None:
     assert cfg.seed == 42
     assert cfg.region.province == "Kalimantan Timur"
     assert cfg.grid.resolution_deg == 0.05
+    assert 0 <= cfg.grid.min_area_fraction < 1
     assert cfg.time.week_convention == "iso"
     assert cfg.time.horizon_weeks == 1
     assert cfg.split.train == (2012, 2021)

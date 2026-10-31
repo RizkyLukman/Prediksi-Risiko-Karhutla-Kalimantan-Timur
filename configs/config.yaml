@@ -16,6 +16,7 @@ region:
 
 grid:
   resolution_deg: 0.05
+  min_area_fraction: 0.0         # buang sel jika fraksi luas di dalam provinsi <= nilai ini
 
 time:
   start_date: "2012-01-23"      # TODO(verify): tanggal awal data VIIRS S-NPP

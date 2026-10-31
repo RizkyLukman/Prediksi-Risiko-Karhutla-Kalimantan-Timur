@@ -41,6 +41,7 @@ class RegionConfig(_Strict):
 
 class GridConfig(_Strict):
     resolution_deg: float = Field(gt=0)
+    min_area_fraction: float = Field(ge=0, lt=1)
 
 
 class TimeConfig(_Strict):
