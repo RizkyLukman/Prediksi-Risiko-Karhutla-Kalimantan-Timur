@@ -81,3 +81,20 @@ def test_overlapping_splits_are_rejected(tmp_path: Path) -> None:
 def test_missing_file_gives_clear_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="not found"):
         load_config(tmp_path / "nope.yaml")
+
+
+def test_admin_source_section_is_validated() -> None:
+    cfg = load_config()
+    admin = cfg.sources.admin
+    assert admin.expected_adm2_count == 10
+    assert admin.url.startswith("https://")
+    for field in ("raw_filename", "layer", "province_col", "name_col", "pcode_col"):
+        assert getattr(admin, field), f"sources.admin.{field} must not be empty"
+
+
+def test_missing_admin_source_field_gives_clear_error(tmp_path: Path) -> None:
+    data = _valid_dict()
+    del data["sources"]["admin"]["layer"]
+    path = _write(tmp_path, data)
+    with pytest.raises(ConfigError, match="sources.admin.layer"):
+        load_config(path)

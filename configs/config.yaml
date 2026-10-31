@@ -43,3 +43,18 @@ features:
 
 evaluation:
   top_k_percent: [5, 10]
+
+sources:
+  admin:
+    # OQ-4 (diverifikasi 2026-11-01): OCHA COD-AB Indonesia, sumber BPS, lisensi CC BY-IGO.
+    # Layer idn_admin2 berisi 522 kabupaten/kota (valid_on 2020-04-01, version v01),
+    # Kaltim = 10 unit (pcode ID64xx) termasuk Mahakam Ulu (dieja "Mahakam Hulu" di sumber),
+    # Kaltara sudah terpisah (ID65xx). Nama layer dan kolom dibaca langsung dari file.
+    name: "OCHA COD-AB Indonesia (BPS)"
+    url: "https://data.humdata.org/dataset/84a1d98a-790b-4d66-9d14-bbfa48500802/resource/c740a308-0a63-46d6-ab15-b041e62eff58/download/idn_admin_boundaries.gdb.zip"
+    raw_filename: "idn_admin_boundaries.gdb.zip"
+    layer: "idn_admin2"
+    province_col: "adm1_name"
+    name_col: "adm2_name"
+    pcode_col: "adm2_pcode"
+    expected_adm2_count: 10

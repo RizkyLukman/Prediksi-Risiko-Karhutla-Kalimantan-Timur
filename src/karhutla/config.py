@@ -96,6 +96,23 @@ class EvaluationConfig(_Strict):
     top_k_percent: list[int] = Field(min_length=1)
 
 
+class AdminSourceConfig(_Strict):
+    """Where the admin boundary file comes from and how its columns are named."""
+
+    name: str
+    url: str
+    raw_filename: str
+    layer: str
+    province_col: str
+    name_col: str
+    pcode_col: str
+    expected_adm2_count: int = Field(ge=1)
+
+
+class SourcesConfig(_Strict):
+    admin: AdminSourceConfig
+
+
 class Config(_Strict):
     project: str
     seed: int
@@ -107,6 +124,7 @@ class Config(_Strict):
     labels: LabelsConfig
     features: FeaturesConfig
     evaluation: EvaluationConfig
+    sources: SourcesConfig
 
 
 def _format_validation_error(path: Path, error: ValidationError) -> str:
